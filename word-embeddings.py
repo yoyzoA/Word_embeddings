@@ -1,6 +1,3 @@
-# filename: n_phrase_multiword_semantic_drift.py
-# pip install google-genai python-dotenv nltk scikit-learn numpy plotly
-
 import os
 import random
 import numpy as np
@@ -10,24 +7,20 @@ from nltk.corpus import wordnet
 from nltk import download
 from dotenv import load_dotenv
 from google import genai
+import pandas as pd
+import matplotlib.pyplot as plt
 
-# -----------------------------
-# Setup
-# -----------------------------
 download("wordnet")
 download("omw-1.4")
 
 load_dotenv()
 API_KEY = os.getenv("GOOGLE_API_KEY")
 if not API_KEY:
-    raise ValueError("❌ GOOGLE_API_KEY not found in .env")
+    raise ValueError("GOOGLE_API_KEY not found in .env")
 
 client = genai.Client(api_key=API_KEY)
 
 
-# -------------------------------------------------------
-# 1) Multi-word variant generator
-# -------------------------------------------------------
 def generate_variants_multiword(sentence, n_replace=2, variants_per_phrase=10):
     """
     Generates phrases where n words are replaced at the same time.
@@ -37,7 +30,6 @@ def generate_variants_multiword(sentence, n_replace=2, variants_per_phrase=10):
     words = sentence.split()
     all_variants = []
 
-    # Precompute synonyms for each word
     synonym_map = {}
     for i, word in enumerate(words):
         synsets = wordnet.synsets(word)
@@ -51,16 +43,15 @@ def generate_variants_multiword(sentence, n_replace=2, variants_per_phrase=10):
 
         synonyms = list(lemmas - {word})
         if synonyms:
-            synonym_map[i] = synonyms  # index -> list of synonyms
+            synonym_map[i] = synonyms  
 
     replaceable_positions = list(synonym_map.keys())
 
     if len(replaceable_positions) < n_replace:
-        print(f"⚠️ Not enough words with synonyms to replace {n_replace} at once.")
+        print(f"Not enough words with synonyms to replace {n_replace} at once.")
         return []
 
     for _ in range(variants_per_phrase):
-        # pick n positions to replace
         chosen_positions = random.sample(replaceable_positions, n_replace)
 
         new_words = words.copy()
@@ -75,9 +66,6 @@ def generate_variants_multiword(sentence, n_replace=2, variants_per_phrase=10):
     return all_variants
 
 
-# -------------------------------------------------------
-# 2) Human approval loop for ONE base phrase
-# -------------------------------------------------------
 def interactive_approval(sentence, n_replace=2, variants_per_phrase=10):
     print(f"\n🧩 Base phrase:\n{sentence}\n")
 
@@ -87,7 +75,7 @@ def interactive_approval(sentence, n_replace=2, variants_per_phrase=10):
         variants_per_phrase=variants_per_phrase
     )
 
-    approved = [sentence]  # base always included
+    approved = [sentence]  
 
     print(f"🔎 Generated {len(variants)} candidate multi-word variants.\n")
 
@@ -109,29 +97,20 @@ def interactive_approval(sentence, n_replace=2, variants_per_phrase=10):
     return approved
 
 
-# -------------------------------------------------------
-# 3) Embeddings from Google GenAI
-# -------------------------------------------------------
 def get_embeddings(phrases, model="text-embedding-004"):
     result = client.models.embed_content(model=model, contents=phrases)
     vectors = [emb.values for emb in result.embeddings]
     return np.array(vectors)
 
 
-# -------------------------------------------------------
-# 4) Compute L2 distances from base phrase
-# -------------------------------------------------------
 def compute_distances(phrases, embeddings):
     base = embeddings[0]
-    distances = [0.0]  # base distance = 0
+    distances = [0.0]  
     for emb in embeddings[1:]:
         distances.append(np.linalg.norm(emb - base))
     return distances
 
 
-# -------------------------------------------------------
-# 5) Plot all clusters with Plotly
-# -------------------------------------------------------
 def visualize(all_groups, all_embeddings, all_distances):
     flattened_phrases = []
     flattened_clusters = []
@@ -166,12 +145,179 @@ def visualize(all_groups, all_embeddings, all_distances):
     fig.update_layout(hovermode="closest")
     fig.show()
 
+def compute_cluster_statistics(all_groups, all_distances):
+    print("\n======================================")
+    print("SEMANTIC DRIFT STATISTICS")
+    print("======================================\n")
 
-# -------------------------------------------------------
-# 6) MAIN PROGRAM — N base phrases
-# -------------------------------------------------------
+    cluster_averages = []
+
+    for i, (group, distances) in enumerate(zip(all_groups, all_distances), start=1):
+        drift_values = distances[1:]  
+
+        if len(drift_values) == 0:
+            print(f"Cluster {i}: (no approved variants)")
+            cluster_averages.append(0)
+            continue
+
+        avg = np.mean(drift_values)
+        cluster_averages.append(avg)
+
+        print(f"--- Cluster {i} ---")
+        print(f"Base phrase: {group[0]}")
+        print(f"Variants approved: {len(drift_values)}")
+        print(f"Average drift:       {avg:.4f}")
+        print(f"Minimum drift:       {np.min(drift_values):.4f}")
+        print(f"Maximum drift:       {np.max(drift_values):.4f}")
+        print(f"Std deviation:       {np.std(drift_values):.4f}\n")
+
+
+    global_values = [d for cluster in all_distances for d in cluster[1:]]
+    if len(global_values) > 0:
+        global_avg = np.mean(global_values)
+        print("======================================")
+        print("OVERALL SEMANTIC DRIFT")
+        print("======================================")
+        print(f"Total variants approved: {len(global_values)}")
+        print(f"Overall average drift:   {global_avg:.4f}")
+        print(f"Overall min drift:       {np.min(global_values):.4f}")
+        print(f"Overall max drift:       {np.max(global_values):.4f}")
+        print(f"Overall std deviation:   {np.std(global_values):.4f}")
+    else:
+        print("No variants approved → no global stats.\n")
+
+    return cluster_averages
+
+def compute_cluster_statistics(all_groups, all_distances):
+    cluster_stats = {}
+
+    print("\n========== SEMANTIC DRIFT STATISTICS ==========\n")
+
+    global_drift = []
+
+    for i, (group, dist) in enumerate(zip(all_groups, all_distances), start=1):
+        drift_vals = dist[1:]
+
+        if not drift_vals:
+            print(f"Cluster {i} — No valid variants\n")
+            cluster_stats[i] = {
+                "base": group[0],
+                "avg": 0,
+                "min": 0,
+                "max": 0,
+                "std": 0,
+                "count": 0
+            }
+            continue
+
+        avg = np.mean(drift_vals)
+        mn = np.min(drift_vals)
+        mx = np.max(drift_vals)
+        sd = np.std(drift_vals)
+
+        cluster_stats[i] = {
+            "base": group[0],
+            "avg": avg,
+            "min": mn,
+            "max": mx,
+            "std": sd,
+            "count": len(drift_vals)
+        }
+
+        print(f"--- Cluster {i} ---")
+        print(f"Base phrase: {group[0]}")
+        print(f"Variants: {len(drift_vals)}")
+        print(f"Avg drift: {avg:.4f}")
+        print(f"Min drift: {mn:.4f}")
+        print(f"Max drift: {mx:.4f}")
+        print(f"Std dev:   {sd:.4f}\n")
+
+        global_drift.extend(drift_vals)
+
+    if global_drift:
+        global_stats = {
+            "Overall Avg Drift": np.mean(global_drift),
+            "Overall Min Drift": np.min(global_drift),
+            "Overall Max Drift": np.max(global_drift),
+            "Overall StdDev": np.std(global_drift),
+            "Total Variant Count": len(global_drift)
+        }
+
+        print("==== OVERALL ====")
+        for k, v in global_stats.items():
+            print(f"{k}: {v:.4f}" if "Drift" in k else f"{k}: {v}")
+
+    else:
+        global_stats = {
+            "Overall Avg Drift": 0,
+            "Overall Min Drift": 0,
+            "Overall Max Drift": 0,
+            "Overall StdDev": 0,
+            "Total Variant Count": 0
+        }
+
+    return cluster_stats, global_stats
+
+def save_results_csv_and_plots(all_groups, all_distances, cluster_stats, global_stats):
+    rows = []
+
+    for i, (group, distances) in enumerate(zip(all_groups, all_distances), start=1):
+        base_phrase = group[0]
+        for phrase, dist in zip(group, distances):
+            rows.append({
+                "Cluster": f"Cluster {i}",
+                "Base Phrase": base_phrase,
+                "Variant Phrase": phrase,
+                "Distance From Base": dist
+            })
+
+    df = pd.DataFrame(rows)
+
+    cluster_rows = []
+    for i, stats in cluster_stats.items():
+        cluster_rows.append({
+            "Cluster": f"Cluster {i}",
+            "Base Phrase": stats["base"],
+            "Average Drift": stats["avg"],
+            "Min Drift": stats["min"],
+            "Max Drift": stats["max"],
+            "StdDev": stats["std"],
+            "Count": stats["count"]
+        })
+
+    df_cluster = pd.DataFrame(cluster_rows)
+
+    df_global = pd.DataFrame([global_stats])
+
+    with pd.ExcelWriter("semantic_drift_results.xlsx") as writer:
+        df.to_excel(writer, sheet_name="Phrase Variants", index=False)
+        df_cluster.to_excel(writer, sheet_name="Cluster Stats", index=False)
+        df_global.to_excel(writer, sheet_name="Overall Stats", index=False)
+
+    print("\n Saved: semantic_drift_results.xlsx")
+
+    all_drift_values = df["Distance From Base"].values
+    plt.figure(figsize=(10, 6))
+    plt.hist(all_drift_values, bins=20, color="skyblue", edgecolor="black")
+    plt.title("Histogram of Semantic Drift Values")
+    plt.xlabel("Drift Value (L2 norm)")
+    plt.ylabel("Frequency")
+    plt.grid(True)
+    plt.savefig("semantic_drift_histogram.png")
+    plt.close()
+    print("Saved: semantic_drift_histogram.png")
+
+    plt.figure(figsize=(10, 6))
+    plt.bar(df_cluster["Cluster"], df_cluster["Average Drift"], color="orange")
+    plt.title("Average Semantic Drift per Cluster")
+    plt.xlabel("Cluster")
+    plt.ylabel("Average Drift")
+    plt.grid(axis="y")
+    plt.savefig("cluster_average_drift.png")
+    plt.close()
+    print("Saved: cluster_average_drift.png")
+
 if __name__ == "__main__":
-    # Ask how many base phrases and how strong the drift should be
     n_phrases = int(input("How many base phrases (N) do you want? N = "))
     n_replace = int(input("How many words to replace at the same time in each variant? n_replace = "))
     variants_per_phrase = int(input("How many variants per base phrase? variants_per_phrase = "))
@@ -205,3 +351,14 @@ if __name__ == "__main__":
             print(f"{dist:.4f} → {ph}")
 
     visualize(all_groups, all_embeddings, all_distances)
+    cluster_averages = compute_cluster_statistics(all_groups, all_distances)
+    cluster_stats, global_stats = compute_cluster_statistics(all_groups, all_distances)
+
+    save_results_csv_and_plots(
+        all_groups,
+        all_distances,
+        cluster_stats,
+        global_stats
+    )
+
+
