@@ -1,0 +1,12 @@
+google-genai
+matplotlib
+nltk
+numpy
+pandas
+peft
+plotly
+python-dotenv
+scikit-learn
+seaborn
+torch
+transformers
